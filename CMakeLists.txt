@@ -1,5 +1,5 @@
-cmake_minimum_required(VERSION 3.24) # Requires 3.24+ for URL-based FetchContent binaries
-project(OpenSSLExample CXX)
+cmake_minimum_required(VERSION 3.24)
+project(CryptoPDiddy CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -9,7 +9,6 @@ include(FetchContent)
 
 if(WIN32)
     # Automatically downloads pre-built Windows OpenSSL binaries.
-    # The original placeholder URL "https://github.com" cannot be unpacked by FetchContent.
     FetchContent_Declare(
         openssl
         URL "https://github.com/TaurusTLS-Developers/OpenSSL-Distribution/releases/download/v3.5.6/openssl-3.5.6-Windows-x64.zip"
@@ -132,22 +131,20 @@ else()
     set(OPENSSL_SSL_LIB OpenSSL::SSL)
 endif()
 
-add_executable(crypto_app main.cpp)
+add_executable(EpstProject main.cpp CryptEpstein.h)
 
-# Link against the downloaded binaries
-target_include_directories(crypto_app PRIVATE "${OPENSSL_INCLUDE_DIR}")
-target_link_libraries(crypto_app PRIVATE "${OPENSSL_CRYPTO_LIB}" "${OPENSSL_SSL_LIB}")
+target_include_directories(EpstProject PRIVATE "${OPENSSL_INCLUDE_DIR}")
+target_link_libraries(EpstProject PRIVATE "${OPENSSL_CRYPTO_LIB}" "${OPENSSL_SSL_LIB}")
 
-# Copy DLL files to output directory so the executable can run
 if(WIN32)
     if(NOT OPENSSL_CRYPTO_DLL OR NOT OPENSSL_SSL_DLL)
         message(FATAL_ERROR "Downloaded OpenSSL package does not contain the expected DLL files.")
     endif()
 
-    add_custom_command(TARGET crypto_app POST_BUILD
+    add_custom_command(TARGET EpstProject POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${OPENSSL_CRYPTO_DLL}"
         "${OPENSSL_SSL_DLL}"
-        $<TARGET_FILE_DIR:crypto_app>
+        $<TARGET_FILE_DIR:EpstProject>
     )
 endif()

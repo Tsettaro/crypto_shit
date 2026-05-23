@@ -1,31 +1,14 @@
-#include <cstdint>
-#include <cstdio>
-#include <fstream>
-#include <iostream>
-#include <memory>
-#include <stdexcept>
-#include <string>
-#include <vector>
+#include "CryptEpstein.h"
 
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/rand.h>
-#include <openssl/rsa.h>
+using PRIVATE_KEY = std::unique_ptr<EVP_PKEY, PKEYDeleter>;
+using PUBLIC_KEY_CONTEXT = std::unique_ptr<EVP_PKEY_CTX, CTXDeleter>;
+using KEY_BIO = std::unique_ptr<BIO, BIODeleter>;
+using CIPHER_CONTEXT = std::unique_ptr<EVP_CIPHER_CTX, CipherDeleter>;
 
 #define DATA_WRITE(data) reinterpret_cast<const char*>(data)
 #define DATA_READ(data) reinterpret_cast<char*>(data)
 
 constexpr size_t BUFFER_SIZE = 4096;
-// RAII
-struct PKEYDeleter { void operator()(EVP_PKEY* p) const { EVP_PKEY_free(p); } };
-struct CTXDeleter  { void operator()(EVP_PKEY_CTX* p) const { EVP_PKEY_CTX_free(p); } };
-struct CipherDeleter { void operator()(EVP_CIPHER_CTX* ctx) const { EVP_CIPHER_CTX_free(ctx); } };
-struct BIODeleter { void operator()(BIO* b) const { BIO_free_all(b); } };
-
-typedef std::unique_ptr<EVP_PKEY, PKEYDeleter> PRIVATE_KEY;
-typedef std::unique_ptr<EVP_PKEY_CTX, CTXDeleter> PUBLIC_KEY_CONTEXT;
-typedef std::unique_ptr<BIO, BIODeleter> KEY_BIO;
-typedef std::unique_ptr<EVP_CIPHER_CTX, CipherDeleter> CIPTHER_CONTEXT;
 
 void generate_rsa_keypair(const std::string& private_key_path, const std::string& public_key_path) {
     // Initialize the context for key generation
@@ -130,7 +113,7 @@ void hybrid_encrypt(const std::string& input_path, const std::string& output_pat
     out_file.write(DATA_WRITE(iv), sizeof(iv));
 
     // Stream encrypt the actual file data via AES
-    CIPTHER_CONTEXT aes_ctx(EVP_CIPHER_CTX_new());
+    CIPHER_CONTEXT aes_ctx(EVP_CIPHER_CTX_new());
     if (!aes_ctx || EVP_EncryptInit_ex(aes_ctx.get(), EVP_aes_256_cbc(), nullptr, aes_key, iv) != 1) {
         throw std::runtime_error("AES init failed.");
     }
@@ -188,7 +171,7 @@ void hybrid_decrypt(const std::string& input_path, const std::string& output_pat
     aes_key.resize(aes_key_len);
 
     // Stream decrypt the file data using the recovered AES key
-    CIPTHER_CONTEXT aes_ctx(EVP_CIPHER_CTX_new());
+    CIPHER_CONTEXT aes_ctx(EVP_CIPHER_CTX_new());
     if (!aes_ctx || EVP_DecryptInit_ex(aes_ctx.get(), EVP_aes_256_cbc(), nullptr, aes_key.data(), iv) != 1) {
         throw std::runtime_error("AES decrypt init failed.");
     }
