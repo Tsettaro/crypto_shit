@@ -196,21 +196,26 @@ void hybrid_decrypt(const std::string& input_path, const std::string& output_pat
 
 int main() {
     try {
-        // Setup a test file
-        std::ofstream f("important_data.txt"); 
-        f << "Top secret hybrid structural data streams.";
+        const std::string input_path = "important_data.txt";
+        const std::string encrypted_path = "important_data.enc";
+        const std::string restored_path = "restored_test.txt";
+
+        std::ifstream input_check(input_path, std::ios::binary);
+        if (!input_check) {
+            throw std::runtime_error("Cannot open file.");
+        }
         
         std::cout << "Generating RSA-4096 key pair...\n";
         generate_rsa_keypair("private.pem", "public.pem");
         std::cout << "Success! Saved 'private.pem' and 'public.pem'.\n";
 
         std::cout << "Encrypting file with public key...\n";
-        hybrid_encrypt("important_data.txt", "important_data.enc", "public.pem");
+        hybrid_encrypt(input_path, encrypted_path, "public.pem");
 
         std::cout << "Decrypting file with private key...\n";
-        hybrid_decrypt("important_data.enc", "restored_data.txt", "private.pem");
+        hybrid_decrypt(encrypted_path, restored_path, "private.pem");
 
-        std::cout << "Done! Verify 'restored_data.txt' matching original inputs.\n";
+        std::cout << "Done! Verify '" << restored_path << "' matching original inputs.\n";
     } catch (const std::exception& e) {
         std::cerr << "Pipeline failure: " << e.what() << "\n";
         return 1;
