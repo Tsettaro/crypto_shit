@@ -1,0 +1,9 @@
+build/
+.vs/
+out/
+
+*.enc
+important_data.txt
+restored_data.txt
+private.pem
+public.pem
