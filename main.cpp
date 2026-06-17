@@ -211,12 +211,31 @@ void hybrid_encrypt(const std::string& input_path, const std::string& output_pat
         throw std::runtime_error("RSA init failed.");
 
     size_t encrypted_key_len = 0;
-    if (EVP_PKEY_encrypt(rsa_ctx.get(), nullptr, &encrypted_key_len, aes_key, sizeof(aes_key)) <= 0) {
+    if (EVP_PKEY_encrypt(rsa_ctx.get(), nullptr, &encrypted_key_len, aes_key, aes_key_len) <= 0) {
         throw std::runtime_error("RSA encrypted key size calculation failed.");
     }
+
     std::vector<unsigned char> encrypted_key(encrypted_key_len);
-    if (EVP_PKEY_encrypt(rsa_ctx.get(), encrypted_key.data(), &encrypted_key_len, aes_key, sizeof(aes_key)) <= 0)
+    if (EVP_PKEY_encrypt(rsa_ctx.get(), encrypted_key.data(), &encrypted_key_len, aes_key, aes_key_len) <= 0)
         throw std::runtime_error("RSA encryption failed.");
+
+    encrypted_key.resize(encrypted_key_len);
+    return encrypted_key;
+}
+
+void hybrid_encrypt(const std::string& input_path, const std::string& output_path, const std::string& pub_key_path) {
+    auto pub_key = load_public_key(pub_key_path);
+
+    // Generate ephemeral AES key and IV
+    unsigned char aes_key[32];
+    unsigned char iv[16];
+    if (RAND_bytes(aes_key, sizeof(aes_key)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
+        throw std::runtime_error("Failed to generate random AES key/IV.");
+    }
+
+    // Encrypt the AES key using the RSA Public Key
+    std::vector<unsigned char> encrypted_key = rsa_encrypt_aes_key(pub_key.get(), aes_key, sizeof(aes_key));
+    size_t encrypted_key_len = encrypted_key.size();
 
     // Open file streams
     std::ifstream in_file(input_path, std::ios::binary);
@@ -230,26 +249,51 @@ void hybrid_encrypt(const std::string& input_path, const std::string& output_pat
     out_file.write(DATA_WRITE(iv), sizeof(iv));
 
     // Stream encrypt the actual file data via AES
+    aes_encrypt_file(in_file, out_file, aes_key, iv);
+}
+
+// DECRYPTION
+void aes_decrypt_file(std::ifstream& input_file, std::ofstream& output_file, const unsigned char* aes_key, const unsigned char* iv) {
     CIPHER_CONTEXT aes_ctx(EVP_CIPHER_CTX_new());
-    if (!aes_ctx || EVP_EncryptInit_ex(aes_ctx.get(), EVP_aes_256_cbc(), nullptr, aes_key, iv) != 1) {
-        throw std::runtime_error("AES init failed.");
+    if (!aes_ctx || EVP_DecryptInit_ex(aes_ctx.get(), EVP_aes_256_cbc(), nullptr, aes_key, iv) != 1) {
+        throw std::runtime_error("AES decrypt init failed.");
     }
 
-    std::vector<char> in_buf(BUFFER_SIZE);
-    std::vector<unsigned char> out_buf(BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
+    std::vector<char> input_buf(BUFFER_SIZE);
+    std::vector<unsigned char> output_buf(BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
     int out_len = 0;
 
-    while (in_file.read(in_buf.data(), BUFFER_SIZE) || in_file.gcount() > 0) {
-        if (EVP_EncryptUpdate(aes_ctx.get(), out_buf.data(), &out_len,
-                               reinterpret_cast<const unsigned char*>(in_buf.data()), in_file.gcount()) != 1) {
-            throw std::runtime_error("AES update failed.");
+    while (input_file.read(input_buf.data(), BUFFER_SIZE) || input_file.gcount() > 0) {
+        if (EVP_DecryptUpdate(aes_ctx.get(), output_buf.data(), &out_len,
+                               reinterpret_cast<const unsigned char*>(input_buf.data()), input_file.gcount()) != 1) {
+            throw std::runtime_error("AES decrypt update failed.");
         }
-        out_file.write(DATA_WRITE(out_buf.data()), out_len);
+        output_file.write(DATA_READ(output_buf.data()), out_len);
     }
 
-    if (EVP_EncryptFinal_ex(aes_ctx.get(), out_buf.data(), &out_len) != 1) 
-        throw std::runtime_error("AES final failed.");
-    out_file.write(DATA_WRITE(out_buf.data()), out_len);
+    if (EVP_DecryptFinal_ex(aes_ctx.get(), output_buf.data(), &out_len) != 1) {
+        throw std::runtime_error("Decryption integrity check failed.");
+    }
+    output_file.write(DATA_READ(output_buf.data()), out_len);
+}
+
+std::vector<unsigned char> rsa_decrypt_aes_key(EVP_PKEY* priv_key, const std::vector<unsigned char>& encrypted_key) {
+    PUBLIC_KEY_CONTEXT rsa_ctx(EVP_PKEY_CTX_new(priv_key, nullptr));
+    if (!rsa_ctx || EVP_PKEY_decrypt_init(rsa_ctx.get()) <= 0) throw std::runtime_error("RSA decrypt init failed.");
+
+    size_t aes_key_len = 0;
+    if (EVP_PKEY_decrypt(rsa_ctx.get(), nullptr, &aes_key_len, encrypted_key.data(), encrypted_key.size()) <= 0)
+        throw std::runtime_error("RSA decrypted key size calculation failed.");
+
+    std::vector<unsigned char> aes_key(aes_key_len);
+    if (EVP_PKEY_decrypt(rsa_ctx.get(), aes_key.data(), &aes_key_len, encrypted_key.data(), encrypted_key.size()) <= 0) {
+        throw std::runtime_error("RSA decryption failed. Key might be wrong or corrupted.");
+    }
+    if (aes_key_len != 32)
+        throw std::runtime_error("RSA decryption produced an unexpected AES key size.");
+
+    aes_key.resize(aes_key_len);
+    return aes_key;
 }
 
 // DECRYPTION
@@ -308,27 +352,7 @@ void hybrid_decrypt(const std::string& input_path, const std::string& output_pat
         throw std::runtime_error("Decryption produced an unexpected AES key size.");
 
     // Stream decrypt the file data using the recovered AES key
-    CIPHER_CONTEXT aes_ctx(EVP_CIPHER_CTX_new());
-    if (!aes_ctx || EVP_DecryptInit_ex(aes_ctx.get(), EVP_aes_256_cbc(), nullptr, aes_key.data(), iv) != 1) {
-        throw std::runtime_error("AES decrypt init failed.");
-    }
-
-    std::vector<char> input_buf(BUFFER_SIZE);
-    std::vector<unsigned char> output_buf(BUFFER_SIZE + EVP_MAX_BLOCK_LENGTH);
-    int out_len = 0;
-
-    while (input_file.read(input_buf.data(), BUFFER_SIZE) || input_file.gcount() > 0) {
-        if (EVP_DecryptUpdate(aes_ctx.get(), output_buf.data(), &out_len,
-                               reinterpret_cast<const unsigned char*>(input_buf.data()), input_file.gcount()) != 1) {
-            throw std::runtime_error("AES decrypt update failed.");
-        }
-        output_file.write(DATA_READ(output_buf.data()), out_len);
-    }
-
-    if (EVP_DecryptFinal_ex(aes_ctx.get(), output_buf.data(), &out_len) != 1) {
-        throw std::runtime_error("Decryption integrity check failed.");
-    }
-    output_file.write(DATA_READ(output_buf.data()), out_len);
+    aes_decrypt_file(input_file, output_file, aes_key.data(), iv);
 }
 
 int main() {
