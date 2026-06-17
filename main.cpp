@@ -173,6 +173,18 @@ void generate_rsa_keypair(const std::string& private_key_path, const std::string
 
 // Load Public Key from file
 PRIVATE_KEY load_public_key(const std::string& path) {
+    static std::unordered_map<std::string, std::shared_ptr<EVP_PKEY>> cache;
+    static std::mutex cache_mutex;
+
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        auto it = cache.find(path);
+        if (it != cache.end()) {
+            EVP_PKEY_up_ref(it->second.get());
+            return PRIVATE_KEY(it->second.get());
+        }
+    }
+
     KEY_BIO file(BIO_new_file(path.c_str(), "r"));
     if (!file) 
         throw std::runtime_error("Cannot open public key file.");
@@ -180,7 +192,22 @@ PRIVATE_KEY load_public_key(const std::string& path) {
     EVP_PKEY* pkey = PEM_read_bio_PUBKEY(file.get(), nullptr, nullptr, nullptr);
     if (!pkey) 
         throw std::runtime_error("Failed to read public key.");
-    return PRIVATE_KEY(pkey);
+
+    std::shared_ptr<EVP_PKEY> shared_pkey(pkey, EVP_PKEY_free);
+
+    {
+        std::lock_guard<std::mutex> lock(cache_mutex);
+        auto it = cache.find(path);
+        if (it != cache.end()) {
+            // Another thread already cached it, use theirs
+            EVP_PKEY_up_ref(it->second.get());
+            return PRIVATE_KEY(it->second.get());
+        } else {
+            cache[path] = shared_pkey;
+            EVP_PKEY_up_ref(shared_pkey.get());
+            return PRIVATE_KEY(shared_pkey.get());
+        }
+    }
 }
 
 // Load Private Key from file
