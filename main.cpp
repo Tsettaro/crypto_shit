@@ -77,42 +77,24 @@ PRIVATE_KEY load_private_key(const std::string& path) {
     return PRIVATE_KEY(pkey);
 }
 
-// ENCRYPTION
-void hybrid_encrypt(const std::string& input_path, const std::string& output_path, const std::string& pub_key_path) {
-    auto pub_key = load_public_key(pub_key_path);
-
-    // Generate ephemeral AES key and IV
-    unsigned char aes_key[32];
-    unsigned char iv[16];
-    if (RAND_bytes(aes_key, sizeof(aes_key)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
-        throw std::runtime_error("Failed to generate random AES key/IV.");
-    }
-
-    // Encrypt the AES key using the RSA Public Key
-    PUBLIC_KEY_CONTEXT rsa_ctx(EVP_PKEY_CTX_new(pub_key.get(), nullptr));
+// HELPER: RSA Encrypt AES Key
+std::vector<unsigned char> rsa_encrypt_aes_key(const unsigned char aes_key[32], EVP_PKEY* pub_key) {
+    PUBLIC_KEY_CONTEXT rsa_ctx(EVP_PKEY_CTX_new(pub_key, nullptr));
     if (!rsa_ctx || EVP_PKEY_encrypt_init(rsa_ctx.get()) <= 0) 
         throw std::runtime_error("RSA init failed.");
 
     size_t encrypted_key_len = 0;
-    if (EVP_PKEY_encrypt(rsa_ctx.get(), nullptr, &encrypted_key_len, aes_key, sizeof(aes_key)) <= 0) {
+    if (EVP_PKEY_encrypt(rsa_ctx.get(), nullptr, &encrypted_key_len, aes_key, 32) <= 0) {
         throw std::runtime_error("RSA encrypted key size calculation failed.");
     }
     std::vector<unsigned char> encrypted_key(encrypted_key_len);
-    if (EVP_PKEY_encrypt(rsa_ctx.get(), encrypted_key.data(), &encrypted_key_len, aes_key, sizeof(aes_key)) <= 0)
+    if (EVP_PKEY_encrypt(rsa_ctx.get(), encrypted_key.data(), &encrypted_key_len, aes_key, 32) <= 0)
         throw std::runtime_error("RSA encryption failed.");
+    return encrypted_key;
+}
 
-    // Open file streams
-    std::ifstream in_file(input_path, std::ios::binary);
-    std::ofstream out_file(output_path, std::ios::binary);
-    if (!in_file || !out_file) throw std::runtime_error("File stream error.");
-
-    // Write metadata header
-    uint32_t key_len_header = static_cast<uint32_t>(encrypted_key_len);
-    out_file.write(DATA_WRITE(&key_len_header), sizeof(key_len_header));
-    out_file.write(DATA_WRITE(encrypted_key.data()), encrypted_key_len);
-    out_file.write(DATA_WRITE(iv), sizeof(iv));
-
-    // Stream encrypt the actual file data via AES
+// HELPER: AES Stream Encrypt
+void aes_encrypt_stream(std::ifstream& in_file, std::ofstream& out_file, const unsigned char aes_key[32], const unsigned char iv[16]) {
     CIPHER_CONTEXT aes_ctx(EVP_CIPHER_CTX_new());
     if (!aes_ctx || EVP_EncryptInit_ex(aes_ctx.get(), EVP_aes_256_cbc(), nullptr, aes_key, iv) != 1) {
         throw std::runtime_error("AES init failed.");
@@ -135,42 +117,28 @@ void hybrid_encrypt(const std::string& input_path, const std::string& output_pat
     out_file.write(DATA_WRITE(out_buf.data()), out_len);
 }
 
-// DECRYPTION
-void hybrid_decrypt(const std::string& input_path, const std::string& output_path, const std::string& priv_key_path) {
-    auto priv_key = load_private_key(priv_key_path);
-
-    std::ifstream input_file(input_path, std::ios::binary);
-    std::ofstream output_file(output_path, std::ios::binary);
-    if (!input_file || !output_file) throw std::runtime_error("File stream error.");
-
-    // Read metadata header
-    uint32_t encrypted_key_len = 0;
-    input_file.read(DATA_READ(&encrypted_key_len), sizeof(encrypted_key_len));
-
-    std::vector<unsigned char> encrypted_key(encrypted_key_len);
-    input_file.read(DATA_READ(encrypted_key.data()), encrypted_key_len);
-
-    unsigned char iv[16]{};
-    input_file.read(DATA_READ(iv), sizeof(iv));
-
-    // Decrypt the secret AES key using the RSA Private Key
-    PUBLIC_KEY_CONTEXT rsa_ctx(EVP_PKEY_CTX_new(priv_key.get(), nullptr));
+// HELPER: RSA Decrypt AES Key
+std::vector<unsigned char> rsa_decrypt_aes_key(const std::vector<unsigned char>& encrypted_key, EVP_PKEY* priv_key) {
+    PUBLIC_KEY_CONTEXT rsa_ctx(EVP_PKEY_CTX_new(priv_key, nullptr));
     if (!rsa_ctx || EVP_PKEY_decrypt_init(rsa_ctx.get()) <= 0) throw std::runtime_error("RSA decrypt init failed.");
 
     size_t aes_key_len = 0;
-    if (EVP_PKEY_decrypt(rsa_ctx.get(), nullptr, &aes_key_len, encrypted_key.data(), encrypted_key_len) <= 0)
+    if (EVP_PKEY_decrypt(rsa_ctx.get(), nullptr, &aes_key_len, encrypted_key.data(), encrypted_key.size()) <= 0)
         throw std::runtime_error("RSA decrypted key size calculation failed.");
 
     std::vector<unsigned char> aes_key(aes_key_len);
-    if (EVP_PKEY_decrypt(rsa_ctx.get(), aes_key.data(), &aes_key_len, encrypted_key.data(), encrypted_key_len) <= 0) {
+    if (EVP_PKEY_decrypt(rsa_ctx.get(), aes_key.data(), &aes_key_len, encrypted_key.data(), encrypted_key.size()) <= 0) {
         throw std::runtime_error("RSA decryption failed. Key might be wrong or corrupted.");
     }
     if (aes_key_len != 32) 
         throw std::runtime_error("RSA decryption produced an unexpected AES key size.");
 
     aes_key.resize(aes_key_len);
+    return aes_key;
+}
 
-    // Stream decrypt the file data using the recovered AES key
+// HELPER: AES Stream Decrypt
+void aes_decrypt_stream(std::ifstream& input_file, std::ofstream& output_file, const std::vector<unsigned char>& aes_key, const unsigned char iv[16]) {
     CIPHER_CONTEXT aes_ctx(EVP_CIPHER_CTX_new());
     if (!aes_ctx || EVP_DecryptInit_ex(aes_ctx.get(), EVP_aes_256_cbc(), nullptr, aes_key.data(), iv) != 1) {
         throw std::runtime_error("AES decrypt init failed.");
@@ -192,6 +160,60 @@ void hybrid_decrypt(const std::string& input_path, const std::string& output_pat
         throw std::runtime_error("Decryption integrity check failed.");
     }
     output_file.write(DATA_READ(output_buf.data()), out_len);
+}
+
+// ENCRYPTION
+void hybrid_encrypt(const std::string& input_path, const std::string& output_path, const std::string& pub_key_path) {
+    auto pub_key = load_public_key(pub_key_path);
+
+    // Generate ephemeral AES key and IV
+    unsigned char aes_key[32];
+    unsigned char iv[16];
+    if (RAND_bytes(aes_key, sizeof(aes_key)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
+        throw std::runtime_error("Failed to generate random AES key/IV.");
+    }
+
+    // Encrypt the AES key using the RSA Public Key
+    std::vector<unsigned char> encrypted_key = rsa_encrypt_aes_key(aes_key, pub_key.get());
+
+    // Open file streams
+    std::ifstream in_file(input_path, std::ios::binary);
+    std::ofstream out_file(output_path, std::ios::binary);
+    if (!in_file || !out_file) throw std::runtime_error("File stream error.");
+
+    // Write metadata header
+    uint32_t key_len_header = static_cast<uint32_t>(encrypted_key.size());
+    out_file.write(DATA_WRITE(&key_len_header), sizeof(key_len_header));
+    out_file.write(DATA_WRITE(encrypted_key.data()), encrypted_key.size());
+    out_file.write(DATA_WRITE(iv), sizeof(iv));
+
+    // Stream encrypt the actual file data via AES
+    aes_encrypt_stream(in_file, out_file, aes_key, iv);
+}
+
+// DECRYPTION
+void hybrid_decrypt(const std::string& input_path, const std::string& output_path, const std::string& priv_key_path) {
+    auto priv_key = load_private_key(priv_key_path);
+
+    std::ifstream input_file(input_path, std::ios::binary);
+    std::ofstream output_file(output_path, std::ios::binary);
+    if (!input_file || !output_file) throw std::runtime_error("File stream error.");
+
+    // Read metadata header
+    uint32_t encrypted_key_len = 0;
+    input_file.read(DATA_READ(&encrypted_key_len), sizeof(encrypted_key_len));
+
+    std::vector<unsigned char> encrypted_key(encrypted_key_len);
+    input_file.read(DATA_READ(encrypted_key.data()), encrypted_key_len);
+
+    unsigned char iv[16]{};
+    input_file.read(DATA_READ(iv), sizeof(iv));
+
+    // Decrypt the secret AES key using the RSA Private Key
+    std::vector<unsigned char> aes_key = rsa_decrypt_aes_key(encrypted_key, priv_key.get());
+
+    // Stream decrypt the file data using the recovered AES key
+    aes_decrypt_stream(input_file, output_file, aes_key, iv);
 }
 
 int main() {
