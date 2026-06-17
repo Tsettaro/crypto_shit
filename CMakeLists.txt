@@ -131,10 +131,13 @@ else()
     set(OPENSSL_SSL_LIB OpenSSL::SSL)
 endif()
 
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(YKPIV REQUIRED ykpiv)
+
 add_executable(EpstProject main.cpp CryptEpstein.h)
 
-target_include_directories(EpstProject PRIVATE "${OPENSSL_INCLUDE_DIR}")
-target_link_libraries(EpstProject PRIVATE "${OPENSSL_CRYPTO_LIB}" "${OPENSSL_SSL_LIB}")
+target_include_directories(EpstProject PRIVATE "${OPENSSL_INCLUDE_DIR}" ${YKPIV_INCLUDE_DIRS})
+target_link_libraries(EpstProject PRIVATE "${OPENSSL_CRYPTO_LIB}" "${OPENSSL_SSL_LIB}" ${YKPIV_LIBRARIES})
 
 if(WIN32)
     if(NOT OPENSSL_CRYPTO_DLL OR NOT OPENSSL_SSL_DLL)
