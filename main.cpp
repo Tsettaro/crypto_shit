@@ -129,7 +129,7 @@ using CIPHER_CONTEXT = std::unique_ptr<EVP_CIPHER_CTX, CipherDeleter>;
 
 constexpr size_t BUFFER_SIZE = 4096;
 
-void generate_rsa_keypair(const std::string& private_key_path, const std::string& public_key_path) {
+void generate_rsa_keypair(const std::string& private_key_path, const std::string& public_key_path, const std::string& password) {
     // Initialize the context for key generation
     PUBLIC_KEY_CONTEXT ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr));
     if (!ctx) {
@@ -157,8 +157,8 @@ void generate_rsa_keypair(const std::string& private_key_path, const std::string
     if (!priv_bio) {
         throw std::runtime_error("Failed to create private key file.");
     }
-    // TODO: use private key with password
-    if (PEM_write_bio_PrivateKey(priv_bio.get(), pkey.get(), nullptr, nullptr, 0, nullptr, nullptr) <= 0) {
+
+    if (PEM_write_bio_PrivateKey(priv_bio.get(), pkey.get(), EVP_aes_256_cbc(), (unsigned char*)password.c_str(), password.length(), nullptr, nullptr) <= 0) {
         throw std::runtime_error("Failed to write private key to file.");
     }
 
@@ -184,12 +184,12 @@ PRIVATE_KEY load_public_key(const std::string& path) {
 }
 
 // Load Private Key from file
-PRIVATE_KEY load_private_key(const std::string& path) {
+PRIVATE_KEY load_private_key(const std::string& path, const std::string& password) {
     KEY_BIO file(BIO_new_file(path.c_str(), "r"));
 
     if (!file)
         throw std::runtime_error("Cannot open private key file.");
-    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(file.get(), nullptr, nullptr, nullptr);
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(file.get(), nullptr, nullptr, (void*)password.c_str());
     if (!pkey)
         throw std::runtime_error("Failed to read private key.");
 
