@@ -158,7 +158,9 @@ void generate_rsa_keypair(const std::string& private_key_path, const std::string
         throw std::runtime_error("Failed to create private key file.");
     }
 
-    if (PEM_write_bio_PrivateKey(priv_bio.get(), pkey.get(), EVP_aes_256_cbc(), (unsigned char*)password.c_str(), password.length(), nullptr, nullptr) <= 0) {
+    if (PEM_write_bio_PrivateKey(priv_bio.get(), pkey.get(), EVP_aes_256_cbc(),
+                                 (unsigned char*)password.c_str(),
+                                 password.length(), nullptr, nullptr) <= 0) {
         throw std::runtime_error("Failed to write private key to file.");
     }
 
@@ -216,7 +218,7 @@ PRIVATE_KEY load_private_key(const std::string& path, const std::string& passwor
 
     if (!file)
         throw std::runtime_error("Cannot open private key file.");
-    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(file.get(), nullptr, nullptr, (void*)password.c_str());
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(file.get(), nullptr, nullptr, const_cast<char*>(password.c_str()));
     if (!pkey)
         throw std::runtime_error("Failed to read private key.");
 
